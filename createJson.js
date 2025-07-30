@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const Papa = require('papaparse');
+const sendRequest = require('./sendRequest');
 
 // Function to read JSON template based on company code
 function loadTemplate(companyCode) {
@@ -41,9 +42,10 @@ function createJSONBody(template, prepaymentRequestNumber, zsfnValue, testId) {
     return jsonBody;
 }
 
-// Function to process a single CSV record
-function processRecord(record, template) {
+// Function to process a single CSV record and send API requests
+async function processRecord(record, template) {
     const results = [];
+    const transactionOrderNumbers = [];
     const originalPrepaymentNumber = record['Original Prepayment Request Number'];
     const generatedPrepaymentNumber = record['Generated Prepayment Request Number'];
     const zsfnValue = record['ZFSN'];
@@ -58,12 +60,38 @@ function processRecord(record, template) {
         }
     }
     
+    // Helper function to create JSON and send request
+    async function createAndSendRequest(prepaymentReq, zsfnVal, testId) {
+        const jsonBody = createJSONBody(template, prepaymentReq, zsfnVal, testId);
+        results.push(jsonBody);
+        
+        try {
+            console.log(`    Sending request for TestID: ${testId}...`);
+            const response = await sendRequest(jsonBody);
+            
+            if (response && response.TransactionOrderNumber) {
+                transactionOrderNumbers.push(response.TransactionOrderNumber);
+                console.log(`    ✅ Success: ${testId} - TransactionOrderNumber: ${response.TransactionOrderNumber}`);
+            } else {
+                transactionOrderNumbers.push('NO_TRANSACTION_NUMBER');
+                console.log(`    ⚠️  Success but no TransactionOrderNumber: ${testId}`);
+            }
+            
+            // Add small delay between requests
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+        } catch (error) {
+            transactionOrderNumbers.push('ERROR');
+            console.log(`    ❌ Failed: ${testId} - ${error.message}`);
+        }
+    }
+    
     // Handle different scenarios for Generated Prepayment Request Number
     if (generatedPrepaymentNumber === null || generatedPrepaymentNumber === undefined || generatedPrepaymentNumber === '') {
         // Blank scenario: create one JSON with blank PrepaymentRequestnumber
         const testId = `TEST1ROUND_${originalPrepaymentNumber}1`;
         const zsfn = zsfnValues.length > 0 ? zsfnValues[0] : null;
-        results.push(createJSONBody(template, '', zsfn, testId));
+        await createAndSendRequest('', zsfn, testId);
         
     } else if (typeof generatedPrepaymentNumber === 'string' && (generatedPrepaymentNumber.includes(',') || generatedPrepaymentNumber.trim() === ',')) {
         // Multiple commas scenario: create multiple JSONs
@@ -76,7 +104,7 @@ function processRecord(record, template) {
             for (let i = 0; i < count; i++) {
                 const testId = `TEST1ROUND_${originalPrepaymentNumber}${i + 1}`;
                 const zsfn = zsfnValues[i] || null;
-                results.push(createJSONBody(template, '', zsfn, testId));
+                await createAndSendRequest('', zsfn, testId);
             }
         } else {
             // Has actual values separated by commas
@@ -86,18 +114,19 @@ function processRecord(record, template) {
             if (uniqueValues.length === 1) {
                 // All values are the same, add incremental numbers
                 const baseValue = uniqueValues[0];
-                nonEmptyParts.forEach((part, index) => {
+                for (let index = 0; index < nonEmptyParts.length; index++) {
                     const testId = `TEST1ROUND_${baseValue}${index + 1}`;
                     const zsfn = zsfnValues[index] || zsfnValues[0] || null;
-                    results.push(createJSONBody(template, uniqueValues[0], zsfn, testId));
-                });
+                    await createAndSendRequest(uniqueValues[0], zsfn, testId);
+                }
             } else {
                 // Values are different, use as is
-                nonEmptyParts.forEach((part, index) => {
+                for (let index = 0; index < nonEmptyParts.length; index++) {
+                    const part = nonEmptyParts[index];
                     const testId = `TEST1ROUND_${part}`;
                     const zsfn = zsfnValues[index] || zsfnValues[0] || null;
-                    results.push(createJSONBody(template, part, zsfn, testId));
-                });
+                    await createAndSendRequest(part, zsfn, testId);
+                }
             }
         }
         
@@ -105,14 +134,20 @@ function processRecord(record, template) {
         // Single value scenario
         const testId = `TEST1ROUND_${generatedPrepaymentNumber}`;
         const zsfn = zsfnValues.length > 0 ? zsfnValues[0] : null;
-        results.push(createJSONBody(template, generatedPrepaymentNumber, zsfn, testId));
+        await createAndSendRequest(generatedPrepaymentNumber, zsfn, testId);
     }
     
-    return results;
+    // Concatenate TransactionOrderNumbers with comma delimiter
+    const transactionOrderNumbersString = transactionOrderNumbers.join(', ');
+    
+    return { 
+        jsonBodies: results, 
+        transactionOrderNumbers: transactionOrderNumbersString 
+    };
 }
 
 // Main function
-function main() {
+async function main() {
     try {
         // Read and parse CSV file
         const csvFilePath = path.join(__dirname, 'processing-results.csv');
@@ -147,16 +182,20 @@ function main() {
             recordsByCompany[companyCode].push(record);
         });
         
-        // Process each company group
-        let totalJsonsCreated = 0;
+        // Create output directories
         const outputDir = path.join(__dirname, 'output');
         
-        // Create output directory if it doesn't exist
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir);
         }
         
-        Object.keys(recordsByCompany).forEach(companyCode => {
+        // Process each company group
+        let totalJsonsCreated = 0;
+        let totalRequestsSent = 0;
+        let totalSuccessfulRequests = 0;
+        const updatedCsvRecords = [];
+        
+        for (const companyCode of Object.keys(recordsByCompany)) {
             console.log(`\nProcessing company: ${companyCode}`);
             
             try {
@@ -164,29 +203,61 @@ function main() {
                 const records = recordsByCompany[companyCode];
                 const allJsonBodies = [];
                 
-                records.forEach((record, index) => {
-                    const jsonBodies = processRecord(record, template);
+                // Process each record and send API requests
+                for (let index = 0; index < records.length; index++) {
+                    const record = records[index];
+                    console.log(`  Processing record ${index + 1}/${records.length}...`);
+                    
+                    const { jsonBodies, transactionOrderNumbers } = await processRecord(record, template);
+                    
+                    // Add JSONs to collection
                     allJsonBodies.push(...jsonBodies);
-                    console.log(`  Record ${index + 1}: Generated ${jsonBodies.length} JSON(s)`);
-                });
+                    
+                    // Add TransactionOrderNumbers column to the record
+                    const updatedRecord = {
+                        ...record,
+                        'TransactionOrderNumbers': transactionOrderNumbers
+                    };
+                    updatedCsvRecords.push(updatedRecord);
+                    
+                    console.log(`  Record ${index + 1}: Generated ${jsonBodies.length} JSON(s), TransactionOrderNumbers: ${transactionOrderNumbers}`);
+                    
+                    totalJsonsCreated += jsonBodies.length;
+                    totalRequestsSent += jsonBodies.length;
+                    
+                    // Count successful requests (those that don't have 'ERROR')
+                    const successCount = transactionOrderNumbers.split(', ').filter(num => num !== 'ERROR').length;
+                    totalSuccessfulRequests += successCount;
+                }
                 
-                // Write all JSON bodies for this company to a file
+                // Save JSON bodies to output folder
                 const outputFilePath = path.join(outputDir, `${companyCode}_generated.json`);
                 fs.writeFileSync(outputFilePath, JSON.stringify(allJsonBodies, null, 2));
                 
                 console.log(`  Total JSONs created for ${companyCode}: ${allJsonBodies.length}`);
-                console.log(`  Output written to: ${outputFilePath}`);
-                totalJsonsCreated += allJsonBodies.length;
+                console.log(`  JSON output written to: ${outputFilePath}`);
                 
             } catch (error) {
                 console.error(`Error processing company ${companyCode}:`, error.message);
             }
+        }
+        
+        // Save updated CSV with TransactionOrderNumbers column
+        const updatedCsvPath = path.join(__dirname, 'processing-results-updated.csv');
+        const updatedCsv = Papa.unparse(updatedCsvRecords, {
+            header: true,
+            quotes: true
         });
+        fs.writeFileSync(updatedCsvPath, updatedCsv, 'utf8');
         
         console.log(`\n=== Summary ===`);
         console.log(`Total records processed: ${cleanedData.length}`);
         console.log(`Total JSON bodies created: ${totalJsonsCreated}`);
-        console.log(`Output directory: ${outputDir}`);
+        console.log(`Total API requests sent: ${totalRequestsSent}`);
+        console.log(`Successful API requests: ${totalSuccessfulRequests}`);
+        console.log(`Failed API requests: ${totalRequestsSent - totalSuccessfulRequests}`);
+        console.log(`JSON output directory: ${outputDir}`);
+        console.log(`Updated CSV saved to: ${updatedCsvPath}`);
         
     } catch (error) {
         console.error('Error in main function:', error);
@@ -195,7 +266,7 @@ function main() {
 
 // Run the script
 if (require.main === module) {
-    main();
+    main().catch(console.error);
 }
 
 module.exports = { main, processRecord, createJSONBody };

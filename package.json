@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "axios": "^1.11.0",
     "papaparse": "^5.5.3",
     "yaml": "^2.8.0"
   }

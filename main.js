@@ -6,6 +6,30 @@ const yaml = require('yaml');
 const config = yaml.parse(fs.readFileSync(path.join(__dirname, 'config.yaml'), 'utf8'));
 const companies = config.Company;
 
+let usedUniqueStrings = new Set();
+const uniqueStringsFile = path.join(__dirname, 'used_unique_strings.json');
+
+function loadUniqueStrings() {
+  try {
+    if (fs.existsSync(uniqueStringsFile)) {
+      const data = JSON.parse(fs.readFileSync(uniqueStringsFile, 'utf8'));
+      usedUniqueStrings = new Set(data);
+    }
+  } catch (error) {
+    console.log('Could not load existing unique strings, starting fresh');
+    usedUniqueStrings = new Set();
+  }
+}
+
+// Save unique strings to file
+function saveUniqueStrings() {
+  try {
+    fs.writeFileSync(uniqueStringsFile, JSON.stringify([...usedUniqueStrings], null, 2));
+  } catch (error) {
+    console.error('Error saving unique strings:', error);
+  }
+}
+
 // Initialize local counters (don't modify the original config)
 let counters = {
   UnderDelivery: {
@@ -31,12 +55,16 @@ function generateUniqueId(length = 7) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
   
-  result = '';
-  while (result.length < length) {
-    const char = chars.charAt(Math.floor(Math.random() * chars.length));
-    result += char;
-  }
+  do {
+    result = '';
+    while (result.length < length) {
+      const char = chars.charAt(Math.floor(Math.random() * chars.length));
+      if (!result.includes(char)) result += char;
+    }
+  } while (usedUniqueStrings.has(result));
   
+  usedUniqueStrings.add(result);
+  saveUniqueStrings();
   return result;
 }
 
@@ -302,7 +330,7 @@ function saveResultsToFiles() {
 
 function processAllRecords() {
   try {
-    
+    loadUniqueStrings();
     console.log('Loaded configuration from config.yaml:');
     console.log(JSON.stringify(config, null, 2));
     
