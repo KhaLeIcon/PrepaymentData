@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "papaparse": "^5.5.3",
     "yaml": "^2.8.0"
   }
 }
