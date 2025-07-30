@@ -26,6 +26,55 @@ let counters = {
 let allResults = [];
 let logOutput = [];
 
+// Generate unique ID function
+function generateUniqueId(length = 7) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  
+  result = '';
+  while (result.length < length) {
+    const char = chars.charAt(Math.floor(Math.random() * chars.length));
+    result += char;
+  }
+  
+  return result;
+}
+
+// Function to generate PrepaymentRequestNumber based on case and scenario
+function generatePrepaymentRequestNumber(assignedCase, assignedScenario, originalPrepaymentNumber, oneToManyNumber) {
+  const [delivery, type] = assignedCase.split('-');
+  
+  if (type === 'Happy') {
+    // Use the original PrepaymentRequestnumber from the file
+    if (assignedScenario === 'OneToOne') {
+      return [originalPrepaymentNumber];
+    } else if (assignedScenario === 'OneToMany') {
+      // Generate same number of prepayment request numbers as OneToMany number
+      return Array(oneToManyNumber).fill(originalPrepaymentNumber);
+    }
+  } else if (type === 'NoPrepayment') {
+    // Leave blank for NoPrepayment
+    if (assignedScenario === 'OneToOne') {
+      return [''];
+    } else if (assignedScenario === 'OneToMany') {
+      return Array(oneToManyNumber).fill('');
+    }
+  } else if (type === 'DiffPrepayment') {
+    // Generate random string with 7 characters
+    if (assignedScenario === 'OneToOne') {
+      return [generateUniqueId(7)];
+    } else if (assignedScenario === 'OneToMany') {
+      const numbers = [];
+      for (let i = 0; i < oneToManyNumber; i++) {
+        numbers.push(generateUniqueId(7));
+      }
+      return numbers;
+    }
+  }
+  
+  return [];
+}
+
 // Function to get available cases
 function getAvailableCases() {
   const cases = [];
@@ -168,12 +217,13 @@ function processCompanyRecords(companyCode, companyData, dataSource) {
         soNumber: companyData.SoNumber,
         recordIndex: index + 1,
         billingNumber: record.BillingNumber,
-        prepaymentRequestNumber: record.PrepaymentRequestnumber,
+        originalPrepaymentRequestNumber: record.PrepaymentRequestnumber,
         amount: record.Amount,
         assignedCase: 'N/A - No cases available',
         assignedScenario: 'N/A - No scenarios available',
         oneToManyNumber: null,
         zfsn: '',
+        generatedPrepaymentRequestNumber: '',
         processed: false
       });
       return;
@@ -193,12 +243,21 @@ function processCompanyRecords(companyCode, companyData, dataSource) {
     const zfsnValues = generateZFSN(selectedCase, selectedScenario, record.Amount, oneToManyNumber);
     const zfsnString = zfsnValues.join(', ');
     
+    // Generate PrepaymentRequestNumber values
+    const prepaymentRequestNumbers = generatePrepaymentRequestNumber(
+      selectedCase, 
+      selectedScenario, 
+      record.PrepaymentRequestnumber, 
+      oneToManyNumber
+    );
+    const prepaymentRequestNumberString = prepaymentRequestNumbers.join(', ');
+    
     // Decrease counters
     decreaseCounter(selectedCase);
     decreaseScenarioCounter(selectedScenario);
     
     // Create result message
-    const resultMessage = `Record ${index + 1} (${record.BillingNumber}): ${selectedCase} - ${selectedScenario}${oneToManyNumber ? ` (${oneToManyNumber})` : ''} - ZFSN: ${zfsnString}`;
+    const resultMessage = `Record ${index + 1} (${record.BillingNumber}): ${selectedCase} - ${selectedScenario}${oneToManyNumber ? ` (${oneToManyNumber})` : ''} - ZFSN: ${zfsnString} - PrepaymentReq: ${prepaymentRequestNumberString}`;
     console.log(resultMessage);
     logOutput.push(resultMessage);
     
@@ -209,12 +268,13 @@ function processCompanyRecords(companyCode, companyData, dataSource) {
       soNumber: companyData.SoNumber,
       recordIndex: index + 1,
       billingNumber: record.BillingNumber,
-      prepaymentRequestNumber: record.PrepaymentRequestnumber,
+      originalPrepaymentRequestNumber: record.PrepaymentRequestnumber,
       amount: record.Amount,
       assignedCase: selectedCase,
       assignedScenario: selectedScenario,
       oneToManyNumber: oneToManyNumber,
       zfsn: zfsnString,
+      generatedPrepaymentRequestNumber: prepaymentRequestNumberString,
       processed: true
     });
   });
@@ -226,9 +286,9 @@ function saveResultsToFiles() {
     
     // Save CSV for easy spreadsheet viewing
     const csvFilename = `processing-results.csv`;
-    const csvHeaders = 'Company Code,Data Source,SO Number,Record Index,Billing Number,Prepayment Request Number,Amount,Assigned Case,Assigned Scenario,OneToMany Number,ZFSN,Processed\n';
+    const csvHeaders = 'Company Code,Data Source,SO Number,Record Index,Billing Number,Original Prepayment Request Number,Amount,Assigned Case,Assigned Scenario,OneToMany Number,ZFSN,Generated Prepayment Request Number,Processed\n';
     const csvRows = allResults.map(r => 
-      `${r.companyCode},${r.dataSource},${r.soNumber},${r.recordIndex},${r.billingNumber},${r.prepaymentRequestNumber},${r.amount},"${r.assignedCase}","${r.assignedScenario}",${r.oneToManyNumber || ''},"${r.zfsn || ''}",${r.processed}`
+      `${r.companyCode},${r.dataSource},${r.soNumber},${r.recordIndex},${r.billingNumber},"${r.originalPrepaymentRequestNumber}",${r.amount},"${r.assignedCase}","${r.assignedScenario}",${r.oneToManyNumber || ''},"${r.zfsn || ''}","${r.generatedPrepaymentRequestNumber || ''}",${r.processed}`
     ).join('\n');
     const csvContent = csvHeaders + csvRows;
     
@@ -239,8 +299,10 @@ function saveResultsToFiles() {
     console.error('Error saving results to files:', error);
   }
 }
+
 function processAllRecords() {
   try {
+    
     console.log('Loaded configuration from config.yaml:');
     console.log(JSON.stringify(config, null, 2));
     
