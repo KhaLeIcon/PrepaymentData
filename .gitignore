@@ -3,3 +3,7 @@ node_modules/
 
 # Ignore configuration file
 config.yaml
+
+processing-result.csv
+
+output/
