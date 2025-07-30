@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const yaml = require('yaml');
+const { main: createJsonMain, processRecord, createJSONBody } = require('./createJson');
 
 // Load configuration from config.yaml
 const config = yaml.parse(fs.readFileSync(path.join(__dirname, 'config.yaml'), 'utf8'));
@@ -51,7 +52,7 @@ let allResults = [];
 let logOutput = [];
 
 // Generate unique ID function
-function generateUniqueId(length = 7) {
+function generateUniqueId(length = 8) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
   
@@ -59,7 +60,7 @@ function generateUniqueId(length = 7) {
     result = '';
     while (result.length < length) {
       const char = chars.charAt(Math.floor(Math.random() * chars.length));
-      if (!result.includes(char)) result += char;
+      result += char;
     }
   } while (usedUniqueStrings.has(result));
   
@@ -328,7 +329,7 @@ function saveResultsToFiles() {
   }
 }
 
-function processAllRecords() {
+async function processAllRecords() {
   try {
     loadUniqueStrings();
     console.log('Loaded configuration from config.yaml:');
@@ -370,6 +371,7 @@ function processAllRecords() {
     console.log(`Total scenarios used: ${totalScenariosUsed}`);
     saveResultsToFiles()
     
+    await createJsonMain()
   } catch (error) {
     console.error('Error processing records:', error);
     if (error.code === 'ENOENT') {

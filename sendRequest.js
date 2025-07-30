@@ -38,6 +38,27 @@ async function sendRequest(jsonBody) {
         
         const response = await axios.post(url, jsonBody, authConfig);
         console.log(response.data);
+
+        // Save response data to file
+        const responseFile = path.join(__dirname, 'responses.json');
+        let responses = [];
+        
+        // Read existing responses if file exists
+        if (fs.existsSync(responseFile)) {
+            try {
+                const existingData = fs.readFileSync(responseFile, 'utf8');
+                responses = JSON.parse(existingData);
+            } catch (error) {
+                // If file is corrupted, start with empty array
+                responses = [];
+            }
+        }
+        
+        // Add new response
+        responses.push(response.data);
+        
+        // Write back to file
+        fs.writeFileSync(responseFile, JSON.stringify(responses, null, 2));
         
         const responseData = response.data;
         
